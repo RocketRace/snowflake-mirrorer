@@ -29,7 +29,7 @@ ALTERNATE_THICKNESS = 2
 SNOWFLAKE_SEGMENT_RADIUS = 200
 SNOWFLAKE_SEGMENT_POSITION = (210, 325)
 ALTERNATE_SNOWFLAKE_COLOR = (24, 24, 100)
-VALID_SIZES = (2, 4, 6, 8, 10, 12)
+VALID_SIZES = (4, 6, 8, 10, 12, 14)
 # - Snowflake
 SNOWFLAKE_RADIUS = 150
 SNOWFLAKE_POSITION = (600, 325)
@@ -42,14 +42,15 @@ UI_MIRROR = "Mirror mode: {} (Press M to toggle)"
 UI_ROTATE = "Rotation: {} (Press R to toggle)"
 UI_SLICE = "Slices per snowflake: {} (Press Tab to change)"
 UI_BASIC_POSITION = (40,40)
-UI_MIRROR_POSITION = (0,0)
-UI_ROTATE_POSITION = (0,0)
-UI_SLICE_POSITION = (40, SCREEN_HEIGHT - 70)
+UI_MIRROR_POSITION = (SCREEN_HEIGHT // 2 + 100, 150)
+UI_ROTATE_POSITION = (SCREEN_HEIGHT // 2 + 100, SCREEN_HEIGHT - 150)
+UI_SLICE_POSITION = (20, SCREEN_HEIGHT - 70)
 UI_Y_0 = 0
 UI_Y_1 = 550
 # Defaults
 DEFAULT_SIZE = 6
 DEFAULT_MIRROR = True
+DEFAULT_POLY = False # currently broken with get_region
 
 # === METHODS ===
 def to_rectangular(
@@ -202,6 +203,9 @@ class SnowflakeSegment:
         # The bounds of the box
         x_1, origin_y = self.origin
 
+        # Flip y
+        origin_y = SCREEN_HEIGHT - origin_y
+
         # Largest size of the updating ones
         current_size = VALID_SIZES.index(self.size)
         current_size -= 1
@@ -235,15 +239,13 @@ class SnowflakeSegment:
         '''
         Draws the snowflake segment onto the given pygame surface.
 
-        Returns the area changed.
-
         Position, size, etc. are controlled by constants.
         '''
         # Used to calculate circular sections
-        x,y,radius = self.x, self.y, self.radius
+        x,y = self.origin
+        radius = self.radius
+        y = SCREEN_HEIGHT - y
         half_arc = RADIANS_IN_CIRCLE / self.size / 2
-        # The error margin
-        epsilon = 0.01
         # The greyed out circle outline
         pygame.draw.circle(
             surface,
@@ -252,31 +254,22 @@ class SnowflakeSegment:
             radius,
             ALTERNATE_THICKNESS
         )
-        # The arc of the outline
-        pygame.draw.arc(
-            surface, 
-            ALTERNATE_SNOWFLAKE_COLOR,
-            (x - radius, y - radius, 2 * radius, 2 * radius), 
-            self.centered_angle - half_arc - epsilon,
-            self.centered_angle + half_arc + epsilon, 
-            LINE_THICKNESS
-        )
         # The lines of the outline
         pygame.draw.line(
             surface,
             ALTERNATE_SNOWFLAKE_COLOR,
-            self.origin,
+            (x,y),
             to_rectangular(
                 self.centered_angle - half_arc,
                 self.radius,
-                polar_origin=self.origin,
+                polar_origin=self.origin
             ),
             LINE_THICKNESS
         )
         pygame.draw.line(
             surface,
             ALTERNATE_SNOWFLAKE_COLOR,
-            self.origin,
+            (x,y),
             to_rectangular(
                 self.centered_angle + half_arc,
                 self.radius,
@@ -369,8 +362,11 @@ class Snowflake:
         
         This is used for screen updates and background drawing.
         '''
-        # The bounds of the box
+        # Flip y
         origin_x, origin_y = self.origin
+        origin_y = SCREEN_HEIGHT - origin_y
+
+        # Bounds
         x_1, y_1 = origin_x - self.radius, origin_y - self.radius
         # The second pair is coordinates if updating regions,
         if update:
@@ -388,20 +384,47 @@ class Snowflake:
         # The box
         return pygame.Rect(x_1, y_1, x_2, y_2)
     
-    def draw_outline(self, surface:pygame.surface) -> None:
+    def draw_outline(self, surface:pygame.surface, polygon: bool = DEFAULT_POLY) -> None:
         '''
         Draws the snowflake onto the given pygame surface.
 
+        If polygon is True, the outline will be polygonal rather than circular.
+
         Visual paramaters (color, etc.) are controlled by constants.
         '''
+        # Flip Y due to differences in what is considered (0,0)
+        x, y = self.origin
+        y = SCREEN_HEIGHT - y
         # Draw the snowflake outline
-        pygame.draw.circle(
-            surface,
-            SNOWFLAKE_COLOR,
-            self.origin,
-            self.radius,
-            ALTERNATE_THICKNESS
-        )
+        if polygon:
+            # Radius of points
+            half_arc = RADIANS_IN_CIRCLE / self.size / 2
+            poly_radius = self.radius / math.cos(half_arc)
+            # Points
+            vertices = []
+            for i in range(self.size):
+                point = to_rectangular(
+                    self._current_angle + 2 * i * half_arc,
+                    poly_radius,
+                    polar_origin=self.origin
+                )
+                vertices.append(point)
+            # Draw a polygonal outline
+            pygame.draw.polygon(
+                surface,
+                ALTERNATE_SNOWFLAKE_COLOR,
+                vertices,
+                LINE_THICKNESS
+            )
+        else:
+            # Draw a circle instead
+            pygame.draw.circle(
+                surface,
+                SNOWFLAKE_COLOR,
+                (x, y),
+                self.radius,
+                ALTERNATE_THICKNESS
+            )
     
     def draw_segment(self, surface: pygame.Surface, segment:SnowflakeSegment) -> pygame.Rect:
         '''
@@ -537,11 +560,13 @@ def main() -> int:
                 if event.key == pygame.K_r:
                     # Toggle rotation
                     rotate = not rotate
+                    update_UI = True
                 # M key
                 if event.key == pygame.K_m:
                     # Toggle mirroring
                     snowflake.mirror = not snowflake.mirror
                     update_flake = True
+                    update_UI = True
                 # Tab key
                 elif event.key == pygame.K_TAB:
                     # Cycle between valid sizes
@@ -561,6 +586,7 @@ def main() -> int:
                 elif event.key in (pygame.K_BACKSPACE, pygame.K_DELETE):
                     # Clear the snowflake
                     snowflake.clear_pixels()
+                    # Update
                     update_segment = True
                     update_flake = True
         
@@ -606,28 +632,35 @@ def main() -> int:
                 BACKGROUND_COLOR,
                 bottom_UI
             )
-            # Basic text
-            basic_surface = font.render(
-                UI_BASIC,
-                ANTIALIAS_FONT,
-                ALTERNATE_SNOWFLAKE_COLOR,
-                BACKGROUND_COLOR
+            # Convenience
+            text_pair = zip(
+                (
+                    UI_BASIC,
+                    UI_MIRROR.format(snowflake.mirror),
+                    UI_ROTATE.format(rotate),
+                    UI_SLICE.format(snowflake.size)
+                ),
+                (
+                    UI_BASIC_POSITION,
+                    UI_MIRROR_POSITION,
+                    UI_ROTATE_POSITION,
+                    UI_SLICE_POSITION
+                )
             )
-            surface.blit(
-                basic_surface,
-                UI_BASIC_POSITION
-            )
-            # Slice text
-            slice_surface = font.render(
-                UI_SLICE.format(snowflake.size),
-                ANTIALIAS_FONT,
-                ALTERNATE_SNOWFLAKE_COLOR,
-                BACKGROUND_COLOR
-            )
-            surface.blit(
-                slice_surface,
-                UI_SLICE_POSITION
-            )
+            # Add each of the UI elements
+            for text, pos in text_pair:
+                # Create text surface
+                text_surface = font.render(
+                    text,
+                    ANTIALIAS_FONT,
+                    ALTERNATE_SNOWFLAKE_COLOR,
+                    BACKGROUND_COLOR
+                )
+                # Update main surface
+                surface.blit(
+                    text_surface,
+                    pos
+                )
 
         # === OUTPUT LOGIC ===
         # Rotate our final snowflake
